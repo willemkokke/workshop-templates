@@ -1,0 +1,53 @@
+name: release
+
+# The train: push a tag shaped packages/<pkg>/v<semver> and only that
+# package releases. Tags are immutable and pushed alone.
+on:
+  push:
+    tags: ["packages/*/v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The verify step checks floors against released tags.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync (locked)
+        run: uv sync --locked
+      - name: Verify tag against package
+        id: verify
+        run: uv run --no-sync fm release.verify "$GITHUB_REF_NAME"
+      - name: Build
+        run: uv build --package "${{ steps.verify.outputs.package }}" --out-dir dist
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+  # The workshop's release aftermath (W6): the template snapshot,
+  # tagged v<semver> in lockstep with packages/workshop/v<semver>.
+  templates:
+    if: startsWith(github.ref_name, 'packages/workshop/v')
+    needs: [publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Sync (locked)
+        run: uv sync --locked
+      - name: Deploy key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.WORKSHOP_TEMPLATES_DEPLOY_KEY }}" > ~/.ssh/templates_deploy
+          chmod 600 ~/.ssh/templates_deploy
+      - name: Publish the template snapshot
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/templates_deploy -o StrictHostKeyChecking=accept-new
+        run: uv run --no-sync fm release.templates "${GITHUB_REF_NAME#packages/workshop/v}"

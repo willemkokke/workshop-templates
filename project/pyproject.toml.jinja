@@ -1,0 +1,166 @@
+# The workspace's virtual root: never built, never published.
+[project]
+name = "{{ project_name }}"
+version = "0.0.1"
+description = "{{ project_description }}"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">={{ python_versions[0] }}"
+authors = [{ name = "{{ author_name }}", email = "{{ author_email }}" }]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Repository = "https://github.com/{{ forge_owner }}/{{ project_name }}"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+{% for package in packages %}{{ package.name }} = { workspace = true }
+{% endfor %}
+[dependency-groups]
+dev = [
+    # uv itself, unconstrained so it tracks latest; the lockfile still
+    # resolves it to one exact version (footman's lockfile-churn lesson).
+    "uv",
+    "footman>=0.44",
+    # Typed tool handles tasks.py runs through.
+    "toolroom>=0.6.1",
+    # The workspace members, so root tests import them; an entry may
+    # carry extras the dev loop needs.
+{% for package in packages %}    "{{ package.dev }}",
+{% endfor %}    "pytest>=8.0",
+    # Parallelise the suite across cores (`-n auto`, wired into addopts).
+    "pytest-xdist>=3.6",
+    "ruff>=0.6",
+    # Stubs for the workshop's own yaml reads, so mypy stays strict.
+    "types-pyyaml",
+    # The four-checker typing gate, footman's shape: all gating, none
+    # advisory. The lockfile pins them, so a new checker release only
+    # lands through a deliberate lock bump.
+    "basedpyright>=1.18",
+    "mypy>=1.14",
+    "ty",
+    "pyrefly",
+]
+
+# Ruff and basedpyright configuration cribbed from footman's pyproject:
+# footman's rules, global. Livery adds pydocstyle in the google
+# convention: Google docstrings only, everywhere.
+[tool.ruff]
+line-length = 88
+target-version = "py{{ python_versions[0] | replace('.', '') }}"
+src = [{% for package in packages %}"packages/{{ package.dir }}/src", "packages/{{ package.dir }}/tests", {% endfor %}"tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF", "D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Test bodies explain themselves by name and assertion.
+"tests/**" = ["D1"]
+"**/tests/**" = ["D1"]
+
+[tool.basedpyright]
+include = ["packages", "tests", "tasks.py"]
+# The IDE and the CLI resolve the same environment: the workspace
+# members are editable installs in .venv, so basedpyright must look
+# there whatever interpreter the editor has selected.
+venvPath = "."
+venv = ".venv"
+pythonVersion = "{{ python_versions[0] }}"
+typeCheckingMode = "standard"
+reportMissingModuleSource = false
+
+[tool.mypy]
+# Second gate of the four. livery.* is fully strict; tests and tasks.py
+# run the usage-checking half (check_untyped_defs, on via strict), so
+# every test body type-checks as consumer code without demanding
+# `-> None` on every def. Narrow suppressions live inline as
+# `# type: ignore[code]` with a reason; pyright-only suppressions use
+# `# pyright: ignore` so warn_unused_ignores keeps this checker's set
+# honest.
+files = [
+{% for package in packages %}    "packages/{{ package.dir }}/src",
+    "packages/{{ package.dir }}/tests",
+{% endfor %}    "tests",
+    "tasks.py",
+]
+mypy_path = [
+{% for package in packages %}    "packages/{{ package.dir }}/src",
+    "packages/{{ package.dir }}/tests",
+{% endfor %}]
+# PEP 420 namespace in a src layout: mypy needs both to derive module
+# names without an __init__.py trail.
+namespace_packages = true
+explicit_package_bases = true
+# Deterministic world, whatever host runs the check. linux is the
+# bare-run default; the typecheck task adds darwin and win32 runs,
+# since mypy has no all-platforms mode.
+platform = "linux"
+python_version = "{{ python_versions[0] }}"
+strict = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+disallow_untyped_decorators = false
+# The public surface's re-export discipline is policed by verifytypes
+# and the public-surface test instead.
+implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = "livery.*"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+
+[tool.ty]
+# Third gate. Scope: the packages themselves; the consumer seam in
+# tests is already double-checked by basedpyright and mypy.
+[tool.ty.src]
+include = [{% for package in packages %}"packages/{{ package.dir }}/src"{% if not loop.last %}, {% endif %}{% endfor %}]
+
+[tool.ty.environment]
+# Every platform at once (ty checks the union), {{ python_versions[0] }} floor.
+python-platform = "all"
+python-version = "{{ python_versions[0] }}"
+
+[tool.pyrefly]
+# Fourth gate, same scope as ty. Preset `default`, not `strict`:
+# strict demands @override, and `typing.override` is Python 3.12+; a
+# zero-dependency 3.11 library cannot spell it without a
+# typing_extensions runtime dep. Revisit when 3.11 support ends.
+preset = "default"
+project-includes = [{% for package in packages %}"packages/{{ package.dir }}/src"{% if not loop.last %}, {% endif %}{% endfor %}]
+# Both path heuristics off: a checkout under a dot-directory (a
+# `.claude/worktrees/` worktree) silently skips every include and the
+# gate fails on "no files matched". At the repo root neither setting
+# changes anything.
+use-ignore-files = false
+disable-project-excludes-heuristics = true
+# Every platform at once, {{ python_versions[0] }} floor.
+python-platform = "all"
+python-version = "{{ python_versions[0] }}"
+
+[tool.pyrefly.errors]
+# Held at error so they cannot silently accumulate; both classes are
+# zero today.
+deprecated = "error"
+unnecessary-type-conversion = "error"
+
+[tool.pytest.ini_options]
+testpaths = ["packages", "tests"]
+# `-n auto` fans the suite across cores; `worksteal` because durations
+# are uneven (footman measured it; the choice carries until we measure
+# here).
+addopts = "-q -n auto --dist=worksteal"
