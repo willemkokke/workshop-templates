@@ -1,0 +1,14 @@
+# Rendered by the template channel ({{ template_source_label }}, project kind);
+# the gate keeps it matching its render. Edit the source and
+# run `{{ runner_prog }} template.apply`; an edit here is drift.
+"""The dev loop: the workspace's layers, mounted.
+
+Run with ``uv run {{ runner_prog }} <task>``. ``{{ runner_prog }} check`` is the whole local gate;
+CI runs the same command. The tree comes from the mounted layers; the
+template seeds this file once and never rewrites it, so anything a
+repository adds below the plugin line is its own.
+"""
+
+from footman import plugin
+
+plugin("{{ layer_imports[0] }}")

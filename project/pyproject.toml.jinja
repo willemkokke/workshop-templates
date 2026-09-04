@@ -1,3 +1,6 @@
+# Rendered by the template channel ({{ template_source_label }}, project kind);
+# the gate keeps it matching its render. Edit the source and
+# run `{{ runner_prog }} template.apply`; an edit here is drift.
 # The workspace's virtual root: never built, never published.
 [project]
 name = "{{ project_name }}"
@@ -6,15 +9,12 @@ description = "{{ project_description }}"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">={{ python_versions[0] }}"
-authors = [{ name = "{{ author_name }}", email = "{{ author_email }}" }]
-classifiers = [
+requires-python = ">={{ python_floor }}"
+{% if author_email %}authors = [{ name = "{{ author_name }}", email = "{{ author_email }}" }]
+{% endif %}classifiers = [
     "Development Status :: 1 - Planning",
     "Programming Language :: Python :: 3",
 ]
-
-[project.urls]
-Repository = "https://github.com/{{ forge_owner }}/{{ project_name }}"
 
 [tool.uv]
 package = false
@@ -30,15 +30,30 @@ dev = [
     # uv itself, unconstrained so it tracks latest; the lockfile still
     # resolves it to one exact version (footman's lockfile-churn lesson).
     "uv",
-    "footman>=0.44",
+    "footman>=0.49",
     # Typed tool handles tasks.py runs through.
     "toolroom>=0.6.1",
     # The workspace members, so root tests import them; an entry may
     # carry extras the dev loop needs.
 {% for package in packages %}    "{{ package.dev }}",
+{% endfor %}    # Every contract layer that is not already a member above, so a
+    # rendered tasks.py can always import its plugins.
+{% for requirement in layer_requirements %}    "{{ requirement }}",
 {% endfor %}    "pytest>=8.0",
+    # Coverage feeds the per-package floors the gate enforces;
+    # `patch = ["subprocess"]` needs coverage 7.10 or newer.
+    "pytest-cov>=5",
+    "coverage[toml]>=7.10",
+    # Installs the .pth that arms coverage.process_startup() in every
+    # python the venv starts when COVERAGE_PROCESS_START is set: how
+    # the CI gate meters the whole invocation without wrapping it.
+    "coverage-enable-subprocess>=1.0",
     # Parallelise the suite across cores (`-n auto`, wired into addopts).
     "pytest-xdist>=3.6",
+    # The changelog engine the release train drives, per package,
+    # through each package's rendered cliff.toml. A floor, not a pin:
+    # the lockfile decides the version, so a layer can move it.
+    "git-cliff>=2.13",
     "ruff>=0.6",
     # Stubs for the workshop's own yaml reads, so mypy stays strict.
     "types-pyyaml",
@@ -52,11 +67,11 @@ dev = [
 ]
 
 # Ruff and basedpyright configuration cribbed from footman's pyproject:
-# footman's rules, global. Livery adds pydocstyle in the google
+# footman's rules, global. The workshop adds pydocstyle in the google
 # convention: Google docstrings only, everywhere.
 [tool.ruff]
 line-length = 88
-target-version = "py{{ python_versions[0] | replace('.', '') }}"
+target-version = "py{{ python_floor | replace('.', '') }}"
 src = [{% for package in packages %}"packages/{{ package.dir }}/src", "packages/{{ package.dir }}/tests", {% endfor %}"tests"]
 
 [tool.ruff.lint]
@@ -69,20 +84,27 @@ convention = "google"
 # Test bodies explain themselves by name and assertion.
 "tests/**" = ["D1"]
 "**/tests/**" = ["D1"]
+# The provenance headers name the template source verbatim, and a
+# source URL or path may be long.
+"tasks.py" = ["E501"]
+"tests/test_workspace_contracts.py" = ["E501"]
+# The CI emitters carry workflow YAML as string content; its lines
+# are the generated files' lines, not prose to wrap.
+"**/_ci_generate.py" = ["E501"]
 
 [tool.basedpyright]
-include = ["packages", "tests", "tasks.py"]
+include = [{% if packages %}"packages", {% endif %}"tests", "tasks.py"]
 # The IDE and the CLI resolve the same environment: the workspace
 # members are editable installs in .venv, so basedpyright must look
 # there whatever interpreter the editor has selected.
 venvPath = "."
 venv = ".venv"
-pythonVersion = "{{ python_versions[0] }}"
+pythonVersion = "{{ python_floor }}"
 typeCheckingMode = "standard"
 reportMissingModuleSource = false
 
 [tool.mypy]
-# Second gate of the four. livery.* is fully strict; tests and tasks.py
+# Second gate of the four. {{ namespace_package }}.* is fully strict; tests and tasks.py
 # run the usage-checking half (check_untyped_defs, on via strict), so
 # every test body type-checks as consumer code without demanding
 # `-> None` on every def. Narrow suppressions live inline as
@@ -107,7 +129,7 @@ explicit_package_bases = true
 # bare-run default; the typecheck task adds darwin and win32 runs,
 # since mypy has no all-platforms mode.
 platform = "linux"
-python_version = "{{ python_versions[0] }}"
+python_version = "{{ python_floor }}"
 strict = true
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
@@ -118,7 +140,7 @@ disallow_untyped_decorators = false
 implicit_reexport = true
 
 [[tool.mypy.overrides]]
-module = "livery.*"
+module = "{{ namespace_package }}.*"
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_calls = true
@@ -128,12 +150,12 @@ disallow_untyped_decorators = true
 # Third gate. Scope: the packages themselves; the consumer seam in
 # tests is already double-checked by basedpyright and mypy.
 [tool.ty.src]
-include = [{% for package in packages %}"packages/{{ package.dir }}/src"{% if not loop.last %}, {% endif %}{% endfor %}]
+include = [{% if packages %}{% for package in packages %}"packages/{{ package.dir }}/src"{% if not loop.last %}, {% endif %}{% endfor %}{% else %}"tasks.py"{% endif %}]
 
 [tool.ty.environment]
-# Every platform at once (ty checks the union), {{ python_versions[0] }} floor.
+# Every platform at once (ty checks the union), {{ python_floor }} floor.
 python-platform = "all"
-python-version = "{{ python_versions[0] }}"
+python-version = "{{ python_floor }}"
 
 [tool.pyrefly]
 # Fourth gate, same scope as ty. Preset `default`, not `strict`:
@@ -141,16 +163,16 @@ python-version = "{{ python_versions[0] }}"
 # zero-dependency 3.11 library cannot spell it without a
 # typing_extensions runtime dep. Revisit when 3.11 support ends.
 preset = "default"
-project-includes = [{% for package in packages %}"packages/{{ package.dir }}/src"{% if not loop.last %}, {% endif %}{% endfor %}]
+project-includes = [{% if packages %}{% for package in packages %}"packages/{{ package.dir }}/src"{% if not loop.last %}, {% endif %}{% endfor %}{% else %}"tasks.py"{% endif %}]
 # Both path heuristics off: a checkout under a dot-directory (a
 # `.claude/worktrees/` worktree) silently skips every include and the
 # gate fails on "no files matched". At the repo root neither setting
 # changes anything.
 use-ignore-files = false
 disable-project-excludes-heuristics = true
-# Every platform at once, {{ python_versions[0] }} floor.
+# Every platform at once, {{ python_floor }} floor.
 python-platform = "all"
-python-version = "{{ python_versions[0] }}"
+python-version = "{{ python_floor }}"
 
 [tool.pyrefly.errors]
 # Held at error so they cannot silently accumulate; both classes are
@@ -158,8 +180,30 @@ python-version = "{{ python_versions[0] }}"
 deprecated = "error"
 unnecessary-type-conversion = "error"
 
+[tool.footman.notes]
+# Every misuse note fails the task at its boundary: a raw spawn or
+# an ambient write is fixed or deliberately classified, never
+# ambient. Loosen a single kind here with a reason, never the star.
+"*" = "error"
+
+[tool.coverage.run]
+# Every {{ runner_prog }} child measures: the CI gate arms
+# COVERAGE_PROCESS_START, the installed .pth starts the meter in
+# every python, and the patch cascades through the task shells, the
+# out-of-process pytest, and its workers. Parallel data files merge
+# per leg, then across legs in the aggregating gate job.
+patch = ["subprocess"]
+parallel = true
+relative_files = true
+source = ["{{ namespace_package }}"]
+
+[tool.coverage.paths]
+# One identity for a file whichever separator wrote it, so Windows
+# and POSIX legs combine as one file set.
+packages = ["packages/", "packages\\"]
+
 [tool.pytest.ini_options]
-testpaths = ["packages", "tests"]
+testpaths = [{% if packages %}"packages", {% endif %}"tests"]
 # `-n auto` fans the suite across cores; `worksteal` because durations
 # are uneven (footman measured it; the choice carries until we measure
 # here).
