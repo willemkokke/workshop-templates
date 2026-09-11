@@ -19,7 +19,7 @@ _envops:
 kind:
   type: str
   help: "What to render: a workspace root, or one Python package"
-  choices: [project, package-python, package-python-layer]
+  choices: [project, package-base, package-python, package-python-layer, package-cpp-conan, package-python-nanobind]
   default: project
 
 project_name:
@@ -81,6 +81,41 @@ layer_requirements:
   help: >-
     the dev-group requirement for each layer that is not already a
     workspace member; injected at render time from workshop.toml
+
+docs_site_url:
+  type: str
+  default: ""
+  when: false
+  help: >-
+    the [docs] site-url from workshop.toml; injected at render time,
+    it wires the runner's task links into the published reference
+
+python_registry:
+  type: str
+  default: ""
+  when: false
+  help: >-
+    the [registries] python read index from workshop.toml; injected
+    at render time, it becomes the root pyproject's uv index so the
+    committed file and the contract cannot disagree
+
+python_prerelease:
+  type: str
+  default: ""
+  when: false
+  help: >-
+    the [registries] python prerelease policy from workshop.toml;
+    injected at render time into the root pyproject's [tool.uv]
+
+release_baseline:
+  type: str
+  default: ""
+  when: false
+  help: >-
+    the [release] baseline from the package's workshop.toml; a
+    package whose version line predates this workspace (a migrated
+    distribution) names the version it continues from, and the
+    changelog engine derives the first release here on top of it
 
 template_source_label:
   type: str

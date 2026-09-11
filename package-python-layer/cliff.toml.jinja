@@ -12,12 +12,15 @@
 # it; nothing here is typed by hand.
 
 [bump]
-# The version rules, as footman practises them: before 1.0 a feature
+# The version rules, the ecosystem's own: before 1.0 a feature
 # bumps the minor and a break rides along in it, after 1.0 a break
 # bumps the major, a feature the minor, everything else the patch.
 features_always_bump_minor = true
 breaking_always_bump_major = false
-initial_tag = "packages/{{ package_dir }}/v0.0.0"
+# A migrated package names the version its line continues from in
+# its contract's [release] baseline; a package born here starts at
+# nothing.
+initial_tag = "packages/{{ package_dir }}/v{{ release_baseline or '0.0.0' }}"
 
 [git]
 # One package, one tag line: only this package's paths are read, and

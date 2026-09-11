@@ -1,3 +1,4 @@
+{% set py = [] %}{% set native = [] %}{% for member in packages %}{% if member.dev is defined and member.dev %}{% set _ = py.append(member) %}{% else %}{% set _ = native.append(member) %}{% endif %}{% endfor -%}
 # Rendered by the template channel ({{ template_source_label }}, project kind);
 # the gate keeps it matching its render. Edit the source and
 # run `{{ runner_prog }} template.apply`; an edit here is drift.
@@ -18,24 +19,43 @@ requires-python = ">={{ python_floor }}"
 
 [tool.uv]
 package = false
-
+default-groups = ["dev", "docs"]
+{% if python_prerelease %}prerelease = "{{ python_prerelease }}"
+{% endif %}{% if python_registry %}
+# The contract's python registry: reads resolve here first, the
+# ecosystem default fills the rest. Declared in workshop.toml
+# [registries]; this render carries it, so edit the contract there.
+[[tool.uv.index]]
+name = "workshop"
+url = "{{ python_registry }}"
+{% endif %}
 [tool.uv.workspace]
-members = ["packages/*"]
+# The members, explicitly: the roster lives in the answers and this
+# file is rendered from it, so a glob would only re-derive the same
+# list while letting a stray directory join unnoticed. A non-python
+# member (a cpp-conan package) is no uv project and never appears.
+members = [{% for package in py %}"packages/{{ package.dir }}"{% if not loop.last %}, {% endif %}{% endfor %}]
 
 [tool.uv.sources]
-{% for package in packages %}{{ package.name }} = { workspace = true }
+{% for package in py %}{{ package.name }} = { workspace = true }
 {% endfor %}
 [dependency-groups]
+# The docs toolchain, workshop-rendered so one layer release moves
+# every project's generator together.
+docs = [
+    "zensical>=0.0.50",
+    "mkdocstrings-python>=1.11",
+]
 dev = [
     # uv itself, unconstrained so it tracks latest; the lockfile still
     # resolves it to one exact version (footman's lockfile-churn lesson).
     "uv",
-    "footman>=0.49",
     # Typed tool handles tasks.py runs through.
-    "toolroom>=0.6.1",
-    # The workspace members, so root tests import them; an entry may
+{% if 'footman' not in py | map(attribute='dev') | list %}    "footman>=0.52.2",
+{% endif %}{% if 'toolroom' not in py | map(attribute='dev') | list %}    "toolroom>=0.6.2",
+{% endif %}    # The workspace members, so root tests import them; an entry may
     # carry extras the dev loop needs.
-{% for package in packages %}    "{{ package.dev }}",
+{% for package in py %}    "{{ package.dev }}",
 {% endfor %}    # Every contract layer that is not already a member above, so a
     # rendered tasks.py can always import its plugins.
 {% for requirement in layer_requirements %}    "{{ requirement }}",
@@ -46,7 +66,8 @@ dev = [
     "coverage[toml]>=7.10",
     # Installs the .pth that arms coverage.process_startup() in every
     # python the venv starts when COVERAGE_PROCESS_START is set: how
-    # the CI gate meters the whole invocation without wrapping it.
+    # the CI test runner meters pytest and every process the tests
+    # start without wrapping them.
     "coverage-enable-subprocess>=1.0",
     # Parallelise the suite across cores (`-n auto`, wired into addopts).
     "pytest-xdist>=3.6",
@@ -69,10 +90,16 @@ dev = [
 # Ruff and basedpyright configuration cribbed from footman's pyproject:
 # footman's rules, global. The workshop adds pydocstyle in the google
 # convention: Google docstrings only, everywhere.
-[tool.ruff]
+{% if docs_site_url %}[tool.footman]
+# Task names in --list/--tree/--help (and --json rows) link into the
+# published task reference; the alias tree there redirects each task
+# to its page in the owning package's section.
+docs_url = "{{ docs_site_url }}_generated/tasks/{slug}/"
+
+{% endif %}[tool.ruff]
 line-length = 88
 target-version = "py{{ python_floor | replace('.', '') }}"
-src = [{% for package in packages %}"packages/{{ package.dir }}/src", "packages/{{ package.dir }}/tests", {% endfor %}"tests"]
+src = [{% for package in py %}"packages/{{ package.dir }}/src", "packages/{{ package.dir }}/tests", {% endfor %}"tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF", "D"]
@@ -88,13 +115,19 @@ convention = "google"
 # source URL or path may be long.
 "tasks.py" = ["E501"]
 "tests/test_workspace_contracts.py" = ["E501"]
+"tests/test_docs_drift.py" = ["E501"]
+# Generated tool stubs keep each Args entry on one line so hovers
+# reflow them, and the text is the tool's own; the .pyi is not where
+# prose rules apply. Toolroom's standing ruling, carried over.
+"packages/*/src/**/_stubs/*.pyi" = ["E501", "D"]
 # The CI emitters carry workflow YAML as string content; its lines
 # are the generated files' lines, not prose to wrap.
 "**/_ci_generate.py" = ["E501"]
 
 [tool.basedpyright]
 include = [{% if packages %}"packages", {% endif %}"tests", "tasks.py"]
-# The IDE and the CLI resolve the same environment: the workspace
+{% if native %}exclude = [{% for package in native %}"packages/{{ package.dir }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+{% endif %}# The IDE and the CLI resolve the same environment: the workspace
 # members are editable installs in .venv, so basedpyright must look
 # there whatever interpreter the editor has selected.
 venvPath = "."
@@ -102,6 +135,20 @@ venv = ".venv"
 pythonVersion = "{{ python_floor }}"
 typeCheckingMode = "standard"
 reportMissingModuleSource = false
+
+# The imported toolroom tests monkeypatch module internals by
+# attribute, which this checker reads as private-import use; their
+# conformance rides the same tracked content pass as the docstrings.
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/toolroom/tests"
+reportPrivateImportUsage = false
+
+# The imported footman tests drive internals (`_app`, `_paths`,
+# `_complete`) by design: the suite is the framework's own, and its
+# subjects are private modules. Same tracked pass as toolroom's.
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/footman/tests"
+reportPrivateImportUsage = false
 
 [tool.mypy]
 # Second gate of the four. {{ namespace_package }}.* is fully strict; tests and tasks.py
@@ -112,13 +159,13 @@ reportMissingModuleSource = false
 # `# pyright: ignore` so warn_unused_ignores keeps this checker's set
 # honest.
 files = [
-{% for package in packages %}    "packages/{{ package.dir }}/src",
+{% for package in py %}    "packages/{{ package.dir }}/src",
     "packages/{{ package.dir }}/tests",
 {% endfor %}    "tests",
     "tasks.py",
 ]
 mypy_path = [
-{% for package in packages %}    "packages/{{ package.dir }}/src",
+{% for package in py %}    "packages/{{ package.dir }}/src",
     "packages/{{ package.dir }}/tests",
 {% endfor %}]
 # PEP 420 namespace in a src layout: mypy needs both to derive module
@@ -146,11 +193,19 @@ disallow_incomplete_defs = true
 disallow_untyped_calls = true
 disallow_untyped_decorators = true
 
+[[tool.mypy.overrides]]
+# The generated tool stubs carry the suppressions their generator
+# placed for its own reading of each tool; which of them fire varies
+# with flags this config does not share, and an unused one there is
+# the generator's business, not drift.
+module = "*._stubs.*"
+warn_unused_ignores = false
+
 [tool.ty]
 # Third gate. Scope: the packages themselves; the consumer seam in
 # tests is already double-checked by basedpyright and mypy.
 [tool.ty.src]
-include = [{% if packages %}{% for package in packages %}"packages/{{ package.dir }}/src"{% if not loop.last %}, {% endif %}{% endfor %}{% else %}"tasks.py"{% endif %}]
+include = [{% if py %}{% for package in py %}"packages/{{ package.dir }}/src"{% if not loop.last %}, {% endif %}{% endfor %}{% else %}"tasks.py"{% endif %}]
 
 [tool.ty.environment]
 # Every platform at once (ty checks the union), {{ python_floor }} floor.
@@ -163,7 +218,7 @@ python-version = "{{ python_floor }}"
 # zero-dependency 3.11 library cannot spell it without a
 # typing_extensions runtime dep. Revisit when 3.11 support ends.
 preset = "default"
-project-includes = [{% if packages %}{% for package in packages %}"packages/{{ package.dir }}/src"{% if not loop.last %}, {% endif %}{% endfor %}{% else %}"tasks.py"{% endif %}]
+project-includes = [{% if py %}{% for package in py %}"packages/{{ package.dir }}/src"{% if not loop.last %}, {% endif %}{% endfor %}{% else %}"tasks.py"{% endif %}]
 # Both path heuristics off: a checkout under a dot-directory (a
 # `.claude/worktrees/` worktree) silently skips every include and the
 # gate fails on "no files matched". At the repo root neither setting
@@ -187,15 +242,27 @@ unnecessary-type-conversion = "error"
 "*" = "error"
 
 [tool.coverage.run]
-# Every {{ runner_prog }} child measures: the CI gate arms
-# COVERAGE_PROCESS_START, the installed .pth starts the meter in
-# every python, and the patch cascades through the task shells, the
-# out-of-process pytest, and its workers. Parallel data files merge
-# per leg, then across legs in the aggregating gate job.
+# The tests measure, and every process they start, every
+# {{ runner_prog }} child a test spawns included: inside CI the test
+# runner arms COVERAGE_PROCESS_START in pytest's environment, the
+# installed .pth starts the meter in every python under it, and the
+# patch cascades through the workers. The gate's own driver is never
+# metered, so a line counts only when a test reached it. Parallel
+# data files merge per leg, then across legs in the aggregating
+# gate job.
 patch = ["subprocess"]
 parallel = true
 relative_files = true
+# Branches as well as statements: a conditional's untaken arm is
+# uncovered, where line coverage shows the conditional as covered
+# once its line ran. The floors judge the combined figure.
+branch = true
 source = ["{{ namespace_package }}"]
+# The C tracer, not sys.monitoring: the sysmon core records a line
+# under the first context that reaches it and never again, and the
+# check legs split one run's data per suite by context, which needs
+# every context complete.
+core = "ctrace"
 
 [tool.coverage.paths]
 # One identity for a file whichever separator wrote it, so Windows
